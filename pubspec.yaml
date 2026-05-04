@@ -1,0 +1,25 @@
+name: huggingface_downloader
+description: Download complete model snapshots directly from Hugging Face repositories with resume, overwrite, extension filters, and CLI support.
+version: 1.0.0
+repository: https://github.com/gmpassos/huggingface_downloader
+issue_tracker: https://github.com/gmpassos/huggingface_downloader/issues
+
+executables:
+  huggingface_downloader:
+
+topics:
+  - huggingface
+  - downloader
+  - machine-learning
+  - llm
+  - ai
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  # path: ^1.9.0
+
+dev_dependencies:
+  lints: ^6.1.0
+  test: ^1.31.1
