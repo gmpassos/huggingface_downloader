@@ -6,11 +6,13 @@
 [![Last Commit](https://img.shields.io/github/last-commit/gmpassos/huggingface_downloader?logo=github&logoColor=white)](https://github.com/gmpassos/huggingface_downloader/commits/master)
 [![License](https://img.shields.io/github/license/gmpassos/huggingface_downloader?logo=open-source-initiative&logoColor=green)](https://github.com/gmpassos/huggingface_downloader/blob/master/LICENSE)
 
-`huggingface_downloader` is a Dart utility for **downloading complete model snapshots from Hugging Face Hub**.
+`huggingface_downloader` is a native Dart utility for **downloading complete model snapshots directly from Hugging Face
+Hub**.
 
-It provides a lightweight native implementation similar in spirit to Python's `huggingface_hub.snapshot_download()`, allowing Dart applications and CLI tools to fetch model repositories directly from Hugging Face without external dependencies.
+It provides a lightweight implementation similar in spirit to Python's `huggingface_hub.snapshot_download()`, allowing
+Dart applications, AI runtimes, and CLI tools to fetch Hugging Face repositories without external Python dependencies.
 
-The package supports both **programmatic usage** and a **command line downloader**, making it ideal for:
+Ideal for:
 
 * 🤖 downloading LLM repositories
 * 🧠 fetching tokenizer/config/model artifacts
@@ -26,25 +28,24 @@ The package supports both **programmatic usage** and a **command line downloader
 * 📥 Download complete Hugging Face repository snapshots
 * 📂 Preserve nested directory structure
 * 🔁 Resume interrupted downloads automatically
+* ♻️ Optional full overwrite/redownload mode
 * 🔐 Support gated/private repositories via HF token
-* 🎯 Allow inclusion filters (`--ext`)
-* 🚫 Allow exclusion filters (`--exclude`)
-* 🤖 Built-in `--llm-only` mode for common model artifacts
-* 🧪 Tiny public test repository support for unit/integration tests
+* 🎯 Inclusion filters (`--ext`)
+* 🚫 Exclusion filters (`--exclude`)
+* 🤖 Built-in `--llm-only` mode for common LLM artifacts
+* 📄 Returns downloaded file list programmatically
 * 💻 CLI utility included
-* 🧩 Native Dart implementation using `HttpClient`
+* 🧩 Native dependency-free Dart implementation using `HttpClient`
 
 ---
 
-## Usage
-
-### CLI
+# CLI Usage
 
 Activate globally:
 
 ```bash
 dart pub global activate huggingface_downloader
-```
+````
 
 Run:
 
@@ -54,32 +55,39 @@ huggingface_downloader <repoId> <outputDir> [options]
 
 ---
 
-### Arguments
+## Arguments
 
-* `<repoId>` – Hugging Face repository id
-* `<outputDir>` – Local directory where files will be downloaded
-
----
-
-### Options
-
-* `--token=hf_xxx` – Hugging Face access token for private/gated models
-* `--ext=.json,.safetensors` – Download only selected extensions
-* `--exclude=.onnx,.gguf,.pt` – Exclude unwanted artifact types
-* `--llm-only` – Keep only common LLM files (`json`, `txt`, `model`, `safetensors`, `bin`)
-* `-h`, `--help` – Show help message
+* `<repoId>` → Hugging Face repository id
+* `<outputDir>` → local directory where files will be downloaded
 
 ---
 
-## Examples
+## Options
 
-Download SmolLM2 135M Instruct:
+* `--token=hf_xxx` → Hugging Face access token for private/gated models
+* `--ext=.json,.safetensors` → download only selected extensions
+* `--exclude=.onnx,.gguf,.pt` → exclude unwanted artifact types
+* `--llm-only` → keep only common LLM files
+* `--overwrite` → force full redownload even if files already exist
+* `-h`, `--help` → show help message
+
+---
+
+## CLI Examples
+
+Download SmolLM2:
 
 ```bash
-huggingface_downloader HuggingFaceTB/SmolLM2-135M-Instruct ./models/smollm2-135m --llm-only
+huggingface_downloader HuggingFaceTB/SmolLM2-135M-Instruct ./models/smollm2 --llm-only
 ```
 
-Download Qwen2 excluding ONNX/GGUF:
+Force overwrite existing local files:
+
+```bash
+huggingface_downloader HuggingFaceTB/SmolLM2-135M-Instruct ./models/smollm2 --llm-only --overwrite
+```
+
+Download Qwen excluding ONNX/GGUF:
 
 ```bash
 huggingface_downloader Qwen/Qwen2-0.5B ./models/qwen2 --exclude=.onnx,.gguf
@@ -91,21 +99,15 @@ Download private/gated repository:
 huggingface_downloader meta-llama/Llama-3.2-1B-Instruct ./models/llama --token=hf_xxxxxxxxx --llm-only
 ```
 
-Download a tiny public repo for testing:
-
-```bash
-huggingface_downloader fxmarty/really-tiny-falcon-testing ./test_models/tiny --llm-only
-```
-
 ---
 
-## Example Output
+## Example CLI Output
 
 ```txt
 HuggingFace Downloader
 ----------------------
 Repository : HuggingFaceTB/SmolLM2-135M-Instruct
-Output Dir : ./models/smollm2-135m
+Output Dir : ./models/smollm2
 Mode       : LLM ONLY
 
 Files selected for download: 6
@@ -119,13 +121,23 @@ Files selected for download: 6
 model.safetensors -> 100.0% (542.13 MB / 542.13 MB)
 
 Download completed successfully.
+
+Downloaded files (6):
+----------------------
+models/smollm2/config.json
+models/smollm2/tokenizer.json
+models/smollm2/tokenizer_config.json
+models/smollm2/generation_config.json
+models/smollm2/special_tokens_map.json
+models/smollm2/model.safetensors
 ```
 
 ---
 
-## Programmatic Usage
+# Programmatic Usage
 
-`huggingface_downloader` can be embedded directly into Dart tools, scripts, or model preparation pipelines.
+`huggingface_downloader` can be embedded directly into Dart scripts, model preparation tools, or local inference
+pipelines.
 
 ```dart
 import 'dart:io';
@@ -134,14 +146,19 @@ import 'package:huggingface_downloader/huggingface_downloader.dart';
 Future<void> main() async {
   final downloader = HuggingFaceDownloader();
 
-  await downloader.downloadSnapshot(
+  final files = await downloader.downloadSnapshot(
     repoId: 'HuggingFaceTB/SmolLM2-135M-Instruct',
     localDir: Directory('./models/smollm2'),
     excludeExtensions: ['.onnx', '.gguf'],
+    overwriteExisting: false,
     progress: (file, received, total) {
       print('$file -> $received / $total');
     },
   );
+
+  for (final file in files) {
+    print('Downloaded: ${file.path}');
+  }
 
   downloader.close();
 }
@@ -151,9 +168,9 @@ Future<void> main() async {
 
 ## LLM Only Mode
 
-The `--llm-only` convenience mode is designed for the most common local inference workflow.
+`--llm-only` is a convenience mode designed for the most common local inference workflow.
 
-It automatically includes:
+Automatically includes:
 
 * `.json`
 * `.txt`
@@ -161,7 +178,7 @@ It automatically includes:
 * `.safetensors`
 * `.bin`
 
-and excludes:
+Automatically excludes:
 
 * `.onnx`
 * `.gguf`
@@ -173,30 +190,19 @@ and excludes:
 * `.ot`
 * `.ckpt`
 
-This avoids downloading unrelated framework artifacts often present in Hugging Face repositories.
-
----
-
-## Tiny Test Repository
-
-For automated tests and CI validation, the package recommends using:
-
-```txt
-fxmarty/really-tiny-falcon-testing
-```
-
-This repository is intentionally very small and downloads quickly while still exercising the full Hugging Face snapshot logic.
+This avoids downloading unrelated framework artifacts commonly present in Hugging Face repositories.
 
 ---
 
 ## How It Works
 
-1. Fetches repository manifest from Hugging Face Hub API
-2. Reads repository file list (`siblings`)
-3. Applies inclusion/exclusion filters
-4. Resolves each file through Hugging Face `resolve` endpoints
-5. Streams files to disk with resumable range requests
-6. Preserves repository folder structure locally
+1. Fetch repository manifest from Hugging Face Hub API
+2. Read repository file list (`siblings`)
+3. Apply include/exclude filters
+4. Resolve each file through Hugging Face `resolve` endpoints
+5. Resume or overwrite existing files as requested
+6. Stream files directly to disk
+7. Return the final downloaded file list
 
 ---
 
@@ -204,14 +210,25 @@ This repository is intentionally very small and downloads quickly while still ex
 
 Python has `huggingface_hub.snapshot_download()`.
 
-Dart previously had no native equivalent.
+Dart had no native equivalent.
 
-`huggingface_downloader` fills that gap with a simple, dependency-free, automation-friendly implementation suitable for:
+`huggingface_downloader` fills that gap with a simple automation-friendly downloader suitable for:
 
-* local LLM preparation
 * Dart AI runtimes
+* local LLM preparation
+* CI artifact fetching
+* reproducible model bootstrapping
 * CLI tooling
-* reproducible CI downloads
+
+---
+
+## Test Repository
+
+For automated tests and CI validation, a tiny public repository works very well:
+
+```txt
+fxmarty/really-tiny-falcon-testing
+```
 
 ---
 
@@ -234,4 +251,4 @@ Graciliano M. Passos: [gmpassos@GitHub][github]
 
 ## License
 
-Dart free & open-source [license](https://github.com/dart-lang/stagehand/blob/master/LICENSE).
+Dart free & open-source - [BSD 3-Clause License](https://github.com/dart-lang/stagehand/blob/master/LICENSE).
