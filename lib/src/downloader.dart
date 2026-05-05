@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:path/path.dart' as path;
+
 typedef ProgressCallback =
     void Function(String fileName, int receivedBytes, int totalBytes);
 
@@ -47,13 +49,38 @@ class HuggingFaceDownloader {
 
     final downloadedFiles = <File>[];
 
-    for (final file in files) {
-      final localFile = File('${localDir.path}/$file');
+    for (final filePath in files) {
+      var filePathNormalized = path.posix.normalize(filePath);
+
+      // Reject absolute paths from remote manifest
+      if (path.posix.isAbsolute(filePathNormalized) ||
+          path.windows.isAbsolute(filePathNormalized)) {
+        print(
+          '** Ignoring absolute remote file path: $filePath -> $filePathNormalized',
+        );
+        continue;
+      }
+
+      var filePathNormalizedParts = path.posix.split(filePathNormalized);
+
+      var localFilePath = path.normalize(
+        path.joinAll([localDir.path, ...filePathNormalizedParts]),
+      );
+
+      // Invalid file path, ignore it:
+      if (!path.isWithin(localDir.path, localFilePath)) {
+        print(
+          '** Ignoring invalid local file path: $filePath -> $localFilePath',
+        );
+        continue;
+      }
+
+      final localFile = File(localFilePath);
 
       await _downloadFile(
         repoId: repoId,
         revision: revision,
-        remoteFile: file,
+        remoteFile: filePath,
         localFile: localFile,
         overwriteExisting: overwriteExisting,
         progress: progress,
