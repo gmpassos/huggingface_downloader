@@ -177,6 +177,222 @@ void main() {
       expect(finalSize, equals(originalSize));
       expect(finalBytes, equals(originalBytes));
     });
+
+    test('copies file from local download cache', () async {
+      final cacheDir = await Directory.systemTemp.createTemp(
+        'tmp_hf_cache_test_',
+      );
+
+      try {
+        final downloader1 = HuggingFaceDownloader(
+          localDownloadCacheDirectory: cacheDir,
+          localDownloadCacheMinFileLength: 0,
+        );
+
+        await downloader1.downloadSnapshot(
+          repoId: repoId,
+          localDir: tempDir,
+          allowExtensions: ['.json'],
+        );
+
+        downloader1.close();
+
+        final config1 = File('${tempDir.path}/config.json');
+
+        expect(await config1.exists(), isTrue);
+
+        final originalBytes = await config1.readAsBytes();
+
+        // remove downloaded file
+        await config1.delete();
+
+        expect(await config1.exists(), isFalse);
+
+        final downloader2 = HuggingFaceDownloader(
+          localDownloadCacheDirectory: cacheDir,
+          localDownloadCacheMinFileLength: 0,
+        );
+
+        await downloader2.downloadSnapshot(
+          repoId: repoId,
+          localDir: tempDir,
+          allowExtensions: ['.json'],
+        );
+
+        downloader2.close();
+
+        final config2 = File('${tempDir.path}/config.json');
+
+        expect(await config2.exists(), isTrue);
+
+        final cachedBytes = await config2.readAsBytes();
+
+        expect(cachedBytes, equals(originalBytes));
+
+        final cacheFiles = await cacheDir.list().toList();
+
+        expect(cacheFiles.whereType<File>(), isNotEmpty);
+      } finally {
+        if (await cacheDir.exists()) {
+          await cacheDir.delete(recursive: true);
+        }
+      }
+    });
+
+    test('does not use cache when cached file size differs', () async {
+      final cacheDir = await Directory.systemTemp.createTemp(
+        'tmp_hf_cache_corrupted_',
+      );
+
+      try {
+        final downloader1 = HuggingFaceDownloader(
+          localDownloadCacheDirectory: cacheDir,
+          localDownloadCacheMinFileLength: 0,
+        );
+
+        await downloader1.downloadSnapshot(
+          repoId: repoId,
+          localDir: tempDir,
+          allowExtensions: ['.json'],
+        );
+
+        downloader1.close();
+
+        final cacheFiles = await cacheDir
+            .list()
+            .where((e) => e is File)
+            .cast<File>()
+            .toList();
+
+        expect(cacheFiles, isNotEmpty);
+
+        final cacheFile = cacheFiles.first;
+
+        // corrupt cache file
+        await cacheFile.writeAsString('BROKEN_CACHE', flush: true);
+
+        final config = File('${tempDir.path}/config.json');
+
+        await config.delete();
+
+        final downloader2 = HuggingFaceDownloader(
+          localDownloadCacheDirectory: cacheDir,
+          localDownloadCacheMinFileLength: 0,
+        );
+
+        await downloader2.downloadSnapshot(
+          repoId: repoId,
+          localDir: tempDir,
+          allowExtensions: ['.json'],
+        );
+
+        downloader2.close();
+
+        expect(await config.exists(), isTrue);
+        expect(await config.length(), greaterThan('BROKEN_CACHE'.length));
+      } finally {
+        if (await cacheDir.exists()) {
+          await cacheDir.delete(recursive: true);
+        }
+      }
+    });
+
+    test(
+      'does not create cache for files smaller than minimum length',
+      () async {
+        final cacheDir = await Directory.systemTemp.createTemp(
+          'tmp_hf_cache_min_size_',
+        );
+
+        try {
+          final downloader = HuggingFaceDownloader(
+            localDownloadCacheDirectory: cacheDir,
+            localDownloadCacheMinFileLength: 1024 * 1024 * 1024,
+          );
+
+          await downloader.downloadSnapshot(
+            repoId: repoId,
+            localDir: tempDir,
+            allowExtensions: ['.json'],
+          );
+
+          downloader.close();
+
+          final cacheFiles = await cacheDir.list().toList();
+
+          expect(cacheFiles, isEmpty);
+        } finally {
+          if (await cacheDir.exists()) {
+            await cacheDir.delete(recursive: true);
+          }
+        }
+      },
+    );
+
+    test('cache survives downloader instance recreation', () async {
+      final cacheDir = await Directory.systemTemp.createTemp(
+        'tmp_hf_cache_persist_',
+      );
+
+      late List<int> originalBytes;
+
+      try {
+        {
+          final dir1 = await Directory.systemTemp.createTemp('tmp_hf_dl1_');
+
+          final downloader = HuggingFaceDownloader(
+            localDownloadCacheDirectory: cacheDir,
+            localDownloadCacheMinFileLength: 0,
+          );
+
+          await downloader.downloadSnapshot(
+            repoId: repoId,
+            localDir: dir1,
+            allowExtensions: ['.json'],
+          );
+
+          downloader.close();
+
+          originalBytes = await File('${dir1.path}/config.json').readAsBytes();
+
+          await dir1.delete(recursive: true);
+        }
+
+        {
+          final dir2 = await Directory.systemTemp.createTemp('tmp_hf_dl2_');
+
+          final downloader = HuggingFaceDownloader(
+            localDownloadCacheDirectory: cacheDir,
+            localDownloadCacheMinFileLength: 0,
+          );
+
+          await downloader.downloadSnapshot(
+            repoId: repoId,
+            localDir: dir2,
+            allowExtensions: ['.json'],
+          );
+
+          downloader.close();
+
+          final bytes = await File('${dir2.path}/config.json').readAsBytes();
+
+          expect(bytes, equals(originalBytes));
+
+          await dir2.delete(recursive: true);
+        }
+      } finally {
+        if (await cacheDir.exists()) {
+          await cacheDir.delete(recursive: true);
+        }
+      }
+    });
+
+    test('default cache minimum length is 1MB', () {
+      expect(
+        HuggingFaceDownloader.defaultLocalDownloadCacheMinFileLength,
+        equals(1024 * 128),
+      );
+    });
   });
 }
 

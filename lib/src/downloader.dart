@@ -10,7 +10,18 @@ class HuggingFaceDownloader {
   final HttpClient _http = HttpClient();
   String? _token;
 
-  HuggingFaceDownloader({String? token}) {
+  final Directory? localDownloadCacheDirectory;
+
+  static const defaultLocalDownloadCacheMinFileLength = 1024 * 128;
+
+  final int localDownloadCacheMinFileLength;
+
+  HuggingFaceDownloader({
+    String? token,
+    this.localDownloadCacheDirectory,
+    this.localDownloadCacheMinFileLength =
+        defaultLocalDownloadCacheMinFileLength,
+  }) {
     _token = token;
   }
 
@@ -199,6 +210,28 @@ class HuggingFaceDownloader {
         ? res.contentLength + (res.statusCode == 206 ? existingBytes : 0)
         : -1;
 
+    var cacheFile = await _resolveLocalDownloadCacheFile(
+      repoId,
+      revision,
+      remoteFile,
+      totalBytes,
+    );
+
+    var copiedFromCached = await _copyFileFromDownloadCache(
+      cacheFile,
+      localFile,
+      totalBytes,
+    );
+
+    if (copiedFromCached) {
+      res.detachSocket().then((socket) {
+        socket.destroy();
+      });
+
+      progress?.call(remoteFile, totalBytes, totalBytes);
+      return;
+    }
+
     final sink = localFile.openWrite(
       mode: res.statusCode == 206 ? FileMode.append : FileMode.write,
     );
@@ -213,6 +246,76 @@ class HuggingFaceDownloader {
 
     await sink.flush();
     await sink.close();
+
+    if (cacheFile != null) {
+      await _storeInDownloadCache(localFile, cacheFile, totalBytes);
+    }
+  }
+
+  Future<File?> _resolveLocalDownloadCacheFile(
+    String repoId,
+    String revision,
+    String remoteFile,
+    int totalBytes,
+  ) async {
+    if (totalBytes < localDownloadCacheMinFileLength) return null;
+
+    final localDownloadCacheDirectory = this.localDownloadCacheDirectory;
+    if (localDownloadCacheDirectory == null) return null;
+
+    await localDownloadCacheDirectory.create(recursive: true);
+
+    var cacheFileName = '$repoId--$revision--$remoteFile'.replaceAll(
+      RegExp(r'[^\w-]'),
+      '_',
+    );
+
+    cacheFileName += '.cached';
+
+    return File(path.join(localDownloadCacheDirectory.path, cacheFileName));
+  }
+
+  Future<bool> _copyFileFromDownloadCache(
+    File? cacheFile,
+    File localFile,
+    int totalBytes,
+  ) async {
+    if (cacheFile == null) return false;
+
+    var cacheFileLng = (await cacheFile.exists())
+        ? await cacheFile.length()
+        : 0;
+
+    if (cacheFileLng != totalBytes) return false;
+
+    await cacheFile.copy(localFile.path);
+
+    return true;
+  }
+
+  Future<bool> _storeInDownloadCache(
+    File localFile,
+    File cacheFile,
+    int totalBytes,
+  ) async {
+    var localFileLng = await localFile.length();
+
+    if (localFileLng != totalBytes ||
+        totalBytes < localDownloadCacheMinFileLength) {
+      return false;
+    }
+
+    var cacheFileLng = (await cacheFile.exists())
+        ? await cacheFile.length()
+        : 0;
+
+    if (localFileLng == cacheFileLng) return false;
+
+    await cacheFile.parent.create(recursive: true);
+
+    await localFile.copy(cacheFile.path);
+
+    return true;
   }
 
   void close() {
