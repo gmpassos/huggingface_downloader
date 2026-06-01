@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as path;
 
+import 'download_cache_store.dart';
+
 typedef ProgressCallback =
     void Function(String fileName, int receivedBytes, int totalBytes);
 
@@ -10,18 +12,44 @@ class HuggingFaceDownloader {
   final HttpClient _http = HttpClient();
   String? _token;
 
+  static const defaultLocalDownloadCacheMinFileLength =
+      LocalDirectoryDownloadCacheStore.defaultMinFileLength;
+
+  /// The cache used to serve and store downloaded files. When `null`, no
+  /// caching is performed.
+  final DownloadCacheStore? cacheStore;
+
+  /// Directory for the built-in local download cache.
+  ///
+  /// Convenience for constructing a [LocalDirectoryDownloadCacheStore]; ignored
+  /// when [cacheStore] is provided.
   final Directory? localDownloadCacheDirectory;
 
-  static const defaultLocalDownloadCacheMinFileLength = 1024 * 128;
-
+  /// Minimum file length (in bytes) to be eligible for the built-in local
+  /// download cache. Ignored when [cacheStore] is provided.
   final int localDownloadCacheMinFileLength;
+
+  /// If `true`, files served from the built-in local download cache are linked
+  /// (symbolic link) to the cached file instead of being copied into
+  /// [downloadSnapshot]'s `localDir`. Ignored when [cacheStore] is provided.
+  final bool localDownloadCacheUseLink;
 
   HuggingFaceDownloader({
     String? token,
+    DownloadCacheStore? cacheStore,
     this.localDownloadCacheDirectory,
     this.localDownloadCacheMinFileLength =
         defaultLocalDownloadCacheMinFileLength,
-  }) {
+    this.localDownloadCacheUseLink = false,
+  }) : cacheStore =
+           cacheStore ??
+           (localDownloadCacheDirectory != null
+               ? LocalDirectoryDownloadCacheStore(
+                   directory: localDownloadCacheDirectory,
+                   minFileLength: localDownloadCacheMinFileLength,
+                   useLinks: localDownloadCacheUseLink,
+                 )
+               : null) {
     _token = token;
   }
 
@@ -98,7 +126,6 @@ class HuggingFaceDownloader {
       );
 
       downloadedFiles.add(localFile);
-      stdout.writeln();
     }
 
     return downloadedFiles;
@@ -210,26 +237,40 @@ class HuggingFaceDownloader {
         ? res.contentLength + (res.statusCode == 206 ? existingBytes : 0)
         : -1;
 
-    var cacheFile = await _resolveLocalDownloadCacheFile(
-      repoId,
-      revision,
-      remoteFile,
-      totalBytes,
+    final cacheStore = this.cacheStore;
+    final cacheKey = DownloadCacheKey(
+      repoId: repoId,
+      revision: revision,
+      remoteFile: remoteFile,
     );
 
-    var copiedFromCached = await _copyFileFromDownloadCache(
-      cacheFile,
-      localFile,
-      totalBytes,
-    );
+    final servedFromCache =
+        cacheStore != null &&
+        await cacheStore.fetchTo(
+          key: cacheKey,
+          destination: localFile,
+          totalBytes: totalBytes,
+        );
 
-    if (copiedFromCached) {
+    if (servedFromCache) {
       res.detachSocket().then((socket) {
         socket.destroy();
       });
 
       progress?.call(remoteFile, totalBytes, totalBytes);
       return;
+    }
+
+    // On a fresh write, drop any stale symbolic link at the destination so the
+    // download is written to a regular file instead of through the link.
+    if (res.statusCode != 206) {
+      final existingType = await FileSystemEntity.type(
+        localFile.path,
+        followLinks: false,
+      );
+      if (existingType == FileSystemEntityType.link) {
+        await Link(localFile.path).delete();
+      }
     }
 
     final sink = localFile.openWrite(
@@ -247,75 +288,13 @@ class HuggingFaceDownloader {
     await sink.flush();
     await sink.close();
 
-    if (cacheFile != null) {
-      await _storeInDownloadCache(localFile, cacheFile, totalBytes);
+    if (cacheStore != null) {
+      await cacheStore.store(
+        key: cacheKey,
+        downloadedFile: localFile,
+        totalBytes: totalBytes,
+      );
     }
-  }
-
-  Future<File?> _resolveLocalDownloadCacheFile(
-    String repoId,
-    String revision,
-    String remoteFile,
-    int totalBytes,
-  ) async {
-    if (totalBytes < localDownloadCacheMinFileLength) return null;
-
-    final localDownloadCacheDirectory = this.localDownloadCacheDirectory;
-    if (localDownloadCacheDirectory == null) return null;
-
-    await localDownloadCacheDirectory.create(recursive: true);
-
-    var cacheFileName = '$repoId--$revision--$remoteFile'.replaceAll(
-      RegExp(r'[^\w-]'),
-      '_',
-    );
-
-    cacheFileName += '.cached';
-
-    return File(path.join(localDownloadCacheDirectory.path, cacheFileName));
-  }
-
-  Future<bool> _copyFileFromDownloadCache(
-    File? cacheFile,
-    File localFile,
-    int totalBytes,
-  ) async {
-    if (cacheFile == null) return false;
-
-    var cacheFileLng = (await cacheFile.exists())
-        ? await cacheFile.length()
-        : 0;
-
-    if (cacheFileLng != totalBytes) return false;
-
-    await cacheFile.copy(localFile.path);
-
-    return true;
-  }
-
-  Future<bool> _storeInDownloadCache(
-    File localFile,
-    File cacheFile,
-    int totalBytes,
-  ) async {
-    var localFileLng = await localFile.length();
-
-    if (localFileLng != totalBytes ||
-        totalBytes < localDownloadCacheMinFileLength) {
-      return false;
-    }
-
-    var cacheFileLng = (await cacheFile.exists())
-        ? await cacheFile.length()
-        : 0;
-
-    if (localFileLng == cacheFileLng) return false;
-
-    await cacheFile.parent.create(recursive: true);
-
-    await localFile.copy(cacheFile.path);
-
-    return true;
   }
 
   void close() {

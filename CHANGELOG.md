@@ -1,3 +1,45 @@
+## 1.0.3
+
+- Cache store:
+  - Generalized the download cache into a `DownloadCacheStore` interface
+    (with a `DownloadCacheKey`), responsible for placing files at the download
+    destination (`fetchTo`) and persisting downloaded files (`store`).
+  - Added `LocalDirectoryDownloadCacheStore`, a filesystem-directory
+    implementation that, when `useLinks` is enabled, places files at the
+    destination as symbolic links to the cached version (`supportsLinks`).
+  - `HuggingFaceDownloader` accepts a `cacheStore`; the existing
+    `localDownloadCacheDirectory` / `localDownloadCacheMinFileLength` /
+    `localDownloadCacheUseLink` parameters are a convenience that builds a
+    `LocalDirectoryDownloadCacheStore` (ignored when `cacheStore` is provided).
+
+- `HuggingFaceDownloader`:
+  - Added `localDownloadCacheUseLink` option: serve cached files as symbolic
+    links to the cached version instead of copying them (avoids duplicating
+    large files on disk). Defaults to `false`.
+    - On a fresh download, the file is moved into the cache and the local path
+      is linked to the cached version.
+    - On a cache hit, the local path is linked to the cached file.
+  - When copying from the cache, any existing link at the destination is removed
+    first, so the copy does not write through the link into the cached file.
+  - The streaming download no longer writes through a stale symbolic link at the
+    destination (the link is dropped before a fresh write).
+  - Caching now also works when the server does not report a `Content-Length`
+    (chunked responses): the downloaded file size is used to validate and size
+    the cache entry.
+
+- Tests:
+  - Added `download_cache_store_test.dart` covering
+    `LocalDirectoryDownloadCacheStore` (copy/link `store` and `fetchTo`,
+    minimum length, unknown size, stale-link handling).
+  - Added tests for `localDownloadCacheUseLink`
+    (`huggingface_downloader_test.dart`):
+    - Links file from local cache instead of copying.
+    - Copies (not links) from cache by default.
+    - Linking replaces an existing local file.
+    - Fresh download moves the file to the cache and links it.
+    - Copying from cache removes a stale link at the destination.
+    - Uses an explicitly provided `cacheStore`.
+
 ## 1.0.2
 
 - `HuggingFaceDownloader`:
