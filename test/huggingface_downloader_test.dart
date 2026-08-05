@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:huggingface_downloader/huggingface_downloader.dart';
@@ -747,6 +748,336 @@ void main() {
         HuggingFaceDownloader.defaultLocalDownloadCacheMinFileLength,
         equals(1024 * 128),
       );
+    });
+  });
+
+  group('HuggingFaceDownloader.listFiles', () {
+    const repoId = 'fxmarty/really-tiny-falcon-testing';
+
+    late HuggingFaceDownloader downloader;
+
+    setUp(() => downloader = HuggingFaceDownloader());
+    tearDown(() => downloader.close());
+
+    test('lists the repository contents, sorted', () async {
+      final files = await downloader.listFiles(repoId);
+
+      expect(files, isNotEmpty);
+      expect(files, contains('config.json'));
+      expect(files, contains('pytorch_model.bin'));
+      // Sorted, so a caller can present the list as-is.
+      expect(files, orderedEquals([...files]..sort()));
+    });
+
+    test('allowExtensions keeps only those extensions', () async {
+      final files = await downloader.listFiles(
+        repoId,
+        allowExtensions: ['.json'],
+      );
+
+      expect(files, isNotEmpty);
+      expect(files, contains('config.json'));
+      expect(files.every((f) => f.endsWith('.json')), isTrue, reason: '$files');
+    });
+
+    test('excludeExtensions drops them', () async {
+      final files = await downloader.listFiles(
+        repoId,
+        excludeExtensions: ['.bin'],
+      );
+
+      expect(files, isNotEmpty);
+      expect(files, isNot(contains('pytorch_model.bin')));
+      expect(files, contains('config.json'));
+    });
+
+    test('the README is listed by default and droppable', () async {
+      expect(await downloader.listFiles(repoId), contains('README.md'));
+      expect(
+        await downloader.listFiles(repoId, includeReadme: false),
+        isNot(contains('README.md')),
+      );
+    });
+
+    test('an unknown repository throws', () {
+      expect(
+        downloader.listFiles('fxmarty/definitely-not-a-real-repo-xyzzy'),
+        throwsA(isA<HttpException>()),
+      );
+    });
+  });
+
+  group('HuggingFaceDownloader.downloadFile', () {
+    const repoId = 'fxmarty/really-tiny-falcon-testing';
+
+    // A repository with nested paths, for the `localDir` resolution test.
+    const nestedRepoId = 'hf-internal-testing/tiny-stable-diffusion-torch';
+    const nestedFile = 'unet/config.json';
+
+    late Directory tempDir;
+    late HuggingFaceDownloader downloader;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('tmp_hf_one_file_test_');
+      downloader = HuggingFaceDownloader();
+    });
+
+    tearDown(() async {
+      downloader.close();
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    test('fetches exactly the file named, and nothing else', () async {
+      final file = await downloader.downloadFile(
+        repoId: repoId,
+        remoteFile: 'config.json',
+        localDir: tempDir,
+      );
+
+      expect(await file.exists(), isTrue);
+      expect(path.basename(file.path), 'config.json');
+
+      // The point of the API: one file, not the repository.
+      expect(await _listAllFiles(tempDir), ['config.json']);
+
+      // Real content, not an error page.
+      final json = jsonDecode(await file.readAsString());
+      expect(json, isA<Map>());
+    });
+
+    test('an explicit localFile decides the destination', () async {
+      final target = File(path.join(tempDir.path, 'deep', 'renamed.json'));
+
+      final file = await downloader.downloadFile(
+        repoId: repoId,
+        remoteFile: 'config.json',
+        localFile: target,
+      );
+
+      expect(file.path, target.path);
+      expect(await target.exists(), isTrue);
+      expect(jsonDecode(await target.readAsString()), isA<Map>());
+    });
+
+    test('localDir preserves the remote file\'s nested path', () async {
+      final file = await downloader.downloadFile(
+        repoId: nestedRepoId,
+        remoteFile: nestedFile,
+        localDir: tempDir,
+      );
+
+      expect(
+        file.path,
+        path.join(tempDir.path, 'unet', 'config.json'),
+        reason: 'the nested remote path must be reproduced under localDir',
+      );
+      expect(await file.exists(), isTrue);
+      expect(jsonDecode(await file.readAsString()), isA<Map>());
+    });
+
+    test('resumes a partial file rather than restarting', () async {
+      final file = await downloader.downloadFile(
+        repoId: repoId,
+        remoteFile: 'tokenizer.json',
+        localDir: tempDir,
+      );
+
+      final complete = await file.readAsBytes();
+      expect(complete.length, greaterThan(64));
+
+      await file.writeAsBytes(complete.sublist(0, complete.length ~/ 2));
+      expect(await file.length(), lessThan(complete.length));
+
+      final again = HuggingFaceDownloader();
+      try {
+        await again.downloadFile(
+          repoId: repoId,
+          remoteFile: 'tokenizer.json',
+          localDir: tempDir,
+        );
+      } finally {
+        again.close();
+      }
+
+      // Resumed, not truncated and not spliced onto itself.
+      expect(await file.readAsBytes(), equals(complete));
+    });
+
+    test('a complete file is left alone', () async {
+      final file = await downloader.downloadFile(
+        repoId: repoId,
+        remoteFile: 'config.json',
+        localDir: tempDir,
+      );
+      final before = await file.readAsBytes();
+
+      final again = HuggingFaceDownloader();
+      try {
+        await again.downloadFile(
+          repoId: repoId,
+          remoteFile: 'config.json',
+          localDir: tempDir,
+        );
+      } finally {
+        again.close();
+      }
+
+      expect(await file.readAsBytes(), equals(before));
+    });
+
+    test('overwriteExisting replaces a corrupted file', () async {
+      final file = await downloader.downloadFile(
+        repoId: repoId,
+        remoteFile: 'config.json',
+        localDir: tempDir,
+      );
+      final original = await file.readAsBytes();
+
+      await file.writeAsString('CORRUPTED');
+      expect(await file.length(), isNot(original.length));
+
+      final again = HuggingFaceDownloader();
+      try {
+        await again.downloadFile(
+          repoId: repoId,
+          remoteFile: 'config.json',
+          localDir: tempDir,
+          overwriteExisting: true,
+        );
+      } finally {
+        again.close();
+      }
+
+      expect(await file.readAsBytes(), equals(original));
+    });
+
+    test('reports progress, naming the file, up to its full length', () async {
+      final calls = <(String, int, int)>[];
+
+      final file = await downloader.downloadFile(
+        repoId: repoId,
+        remoteFile: 'tokenizer.json',
+        localDir: tempDir,
+        progress: (name, received, total) =>
+            calls.add((name, received, total)),
+      );
+
+      expect(calls, isNotEmpty);
+      expect(calls.every((c) => c.$1 == 'tokenizer.json'), isTrue);
+      // Monotonic, and finishing at the size actually written.
+      expect(calls.last.$2, await file.length());
+      for (var i = 1; i < calls.length; i++) {
+        expect(calls[i].$2, greaterThanOrEqualTo(calls[i - 1].$2));
+      }
+    });
+
+    test('a second download is served from the cache store', () async {
+      final cacheDir = await Directory.systemTemp.createTemp('tmp_hf_c_test_');
+      final otherDir = await Directory.systemTemp.createTemp('tmp_hf_o_test_');
+
+      try {
+        final first = HuggingFaceDownloader(
+          localDownloadCacheDirectory: cacheDir,
+          localDownloadCacheMinFileLength: 0,
+        );
+        final File a;
+        try {
+          a = await first.downloadFile(
+            repoId: repoId,
+            remoteFile: 'config.json',
+            localDir: tempDir,
+          );
+        } finally {
+          first.close();
+        }
+
+        // The download populated the cache...
+        final cached = await cacheDir.list(recursive: true).toList();
+        expect(cached.whereType<File>(), isNotEmpty);
+
+        // ...and a fresh destination is served from it, byte for byte.
+        final second = HuggingFaceDownloader(
+          localDownloadCacheDirectory: cacheDir,
+          localDownloadCacheMinFileLength: 0,
+        );
+        final File b;
+        try {
+          b = await second.downloadFile(
+            repoId: repoId,
+            remoteFile: 'config.json',
+            localDir: otherDir,
+          );
+        } finally {
+          second.close();
+        }
+
+        expect(await b.readAsBytes(), equals(await a.readAsBytes()));
+      } finally {
+        for (final d in [cacheDir, otherDir]) {
+          if (await d.exists()) await d.delete(recursive: true);
+        }
+      }
+    });
+
+    test('a missing remote file throws', () {
+      expect(
+        downloader.downloadFile(
+          repoId: repoId,
+          remoteFile: 'no-such-file.json',
+          localDir: tempDir,
+        ),
+        throwsA(isA<HttpException>()),
+      );
+    });
+
+    group('argument validation', () {
+      // These reject before any request or write, so they need no network.
+      Future<void> expectRejected({
+        required String remoteFile,
+        File? localFile,
+        Directory? localDir,
+      }) async {
+        await expectLater(
+          downloader.downloadFile(
+            repoId: repoId,
+            remoteFile: remoteFile,
+            localFile: localFile,
+            localDir: localDir,
+          ),
+          throwsA(isA<ArgumentError>()),
+        );
+        expect(
+          await _listAllFiles(tempDir),
+          isEmpty,
+          reason: 'a rejected call must not have written anything',
+        );
+      }
+
+      test('needs exactly one of localFile / localDir', () async {
+        await expectRejected(remoteFile: 'config.json');
+        await expectRejected(
+          remoteFile: 'config.json',
+          localFile: File(path.join(tempDir.path, 'a.json')),
+          localDir: tempDir,
+        );
+      });
+
+      test('an absolute remote path is refused', () async {
+        await expectRejected(remoteFile: '/etc/passwd', localDir: tempDir);
+      });
+
+      test('a remote path climbing out of localDir is refused', () async {
+        await expectRejected(
+          remoteFile: '../escaped.json',
+          localDir: tempDir,
+        );
+        await expectRejected(
+          remoteFile: 'a/b/../../../escaped.json',
+          localDir: tempDir,
+        );
+      });
     });
   });
 }
