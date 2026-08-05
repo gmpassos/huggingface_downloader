@@ -960,8 +960,7 @@ void main() {
         repoId: repoId,
         remoteFile: 'tokenizer.json',
         localDir: tempDir,
-        progress: (name, received, total) =>
-            calls.add((name, received, total)),
+        progress: (name, received, total) => calls.add((name, received, total)),
       );
 
       expect(calls, isNotEmpty);
@@ -1069,10 +1068,7 @@ void main() {
       });
 
       test('a remote path climbing out of localDir is refused', () async {
-        await expectRejected(
-          remoteFile: '../escaped.json',
-          localDir: tempDir,
-        );
+        await expectRejected(remoteFile: '../escaped.json', localDir: tempDir);
         await expectRejected(
           remoteFile: 'a/b/../../../escaped.json',
           localDir: tempDir,
