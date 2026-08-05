@@ -53,6 +53,104 @@ class HuggingFaceDownloader {
     _token = token;
   }
 
+  /// Lists the files a repository holds (the manifest's `rfilename` entries),
+  /// sorted, optionally filtered by extension the same way [downloadSnapshot]
+  /// filters them.
+  ///
+  /// Useful on its own — to show what a repository offers before choosing one
+  /// file with [downloadFile] — and to explain a failed download without
+  /// guessing at what the repository actually contains.
+  Future<List<String>> listFiles(
+    String repoId, {
+    bool includeReadme = true,
+    List<String>? allowExtensions,
+    List<String>? excludeExtensions,
+  }) async {
+    final manifest = await _fetchManifest(repoId);
+    final siblings = manifest['siblings'] as List<dynamic>? ?? [];
+
+    return siblings
+        .map((e) => (e as Map)['rfilename'] as String?)
+        .whereType<String>()
+        .where(
+          (f) => _shouldDownload(
+            f,
+            includeReadme: includeReadme,
+            allowExtensions: allowExtensions,
+            excludeExtensions: excludeExtensions,
+          ),
+        )
+        .toList()
+      ..sort();
+  }
+
+  /// Downloads a single [remoteFile] from [repoId], returning the local file.
+  ///
+  /// A repository is often a rack of alternatives — one model published at a
+  /// dozen quantizations, say — where a full [downloadSnapshot] would fetch
+  /// tens of gigabytes to obtain one file. This takes the same download path
+  /// (resume, cache store, progress, auth) for exactly the file named.
+  ///
+  /// The destination is [localFile] when given, otherwise [remoteFile]'s path
+  /// resolved under [localDir]; exactly one of the two is required. Passing a
+  /// [remoteFile] that escapes [localDir] (an absolute path, or one climbing out
+  /// with `..`) is an [ArgumentError].
+  Future<File> downloadFile({
+    required String repoId,
+    required String remoteFile,
+    File? localFile,
+    Directory? localDir,
+    String revision = 'main',
+    ProgressCallback? progress,
+    bool overwriteExisting = false,
+  }) async {
+    if ((localFile == null) == (localDir == null)) {
+      throw ArgumentError(
+        'downloadFile requires exactly one of `localFile` or `localDir`.',
+      );
+    }
+
+    var destination = localFile;
+
+    if (destination == null) {
+      final normalized = path.posix.normalize(remoteFile);
+
+      if (path.posix.isAbsolute(normalized) ||
+          path.windows.isAbsolute(normalized)) {
+        throw ArgumentError.value(
+          remoteFile,
+          'remoteFile',
+          'must be a path relative to the repository root',
+        );
+      }
+
+      final localPath = path.normalize(
+        path.joinAll([localDir!.path, ...path.posix.split(normalized)]),
+      );
+
+      if (!path.isWithin(localDir.path, localPath)) {
+        throw ArgumentError.value(
+          remoteFile,
+          'remoteFile',
+          'resolves outside `localDir` ($localPath)',
+        );
+      }
+
+      destination = File(localPath);
+    }
+
+    await _downloadFile(
+      repoId: repoId,
+      revision: revision,
+      remoteFile: remoteFile,
+      localFile: destination,
+      overwriteExisting: overwriteExisting,
+      progress: progress,
+    );
+
+    return destination;
+  }
+
   Future<List<File>> downloadSnapshot({
     required String repoId,
     required Directory localDir,

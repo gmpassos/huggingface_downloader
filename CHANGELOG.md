@@ -1,3 +1,20 @@
+## 1.1.0
+
+- `HuggingFaceDownloader`:
+  - Added `downloadFile`: fetches a **single** file from a repository, over the
+    same path `downloadSnapshot` uses (resume, cache store, progress, auth).
+    A repository is often a rack of alternatives — one model published at a
+    dozen quantizations — where a full snapshot would fetch tens of gigabytes
+    to obtain one file.
+    - The destination is either an explicit `localFile`, or `remoteFile`'s path
+      resolved under `localDir`; a remote path that escapes `localDir`
+      (absolute, or climbing out with `..`) is an `ArgumentError` rather than a
+      write outside the directory.
+  - Added `listFiles`: the repository's `rfilename` entries, sorted, with the
+    same extension filtering `downloadSnapshot` applies. Lets a caller show what
+    a repository offers before choosing, and explain a failed download without
+    guessing at its contents.
+
 ## 1.0.3
 
 - Cache store:
