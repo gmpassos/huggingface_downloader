@@ -1,3 +1,34 @@
+## 1.1.0
+
+- `HuggingFaceDownloader`:
+  - **Rate limits (HTTP 429) and transient unavailability (503) are now
+    retried** instead of thrown. The Hub rate-limits by client address, so
+    anything sharing one — CI runners, an office NAT — meets 429 on perfectly
+    ordinary usage, where the answer is to wait rather than to fail.
+    - `maxRetries` (default 5; 0 disables), `retryInitialDelay` (default 1s,
+      doubled per attempt) and `maxRetryDelay` (default 30s) configure it.
+    - A response's `Retry-After` is honoured over the backoff when it names a
+      delay in seconds, capped at `maxRetryDelay` so a server cannot stall the
+      client indefinitely.
+    - Only those two statuses retry: a 404 or a 401 describes the request, and
+      repeating it would only be slower.
+  - Added `endpoint`, defaulting to `$HF_ENDPOINT` and then
+    `https://huggingface.co` — the same variable `huggingface_hub` reads, so a
+    mirror or proxy already configured for those tools is picked up here too.
+  - Added `downloadFile`: fetches a **single** file from a repository, over the
+    same path `downloadSnapshot` uses (resume, cache store, progress, auth).
+    A repository is often a rack of alternatives — one model published at a
+    dozen quantizations — where a full snapshot would fetch tens of gigabytes
+    to obtain one file.
+    - The destination is either an explicit `localFile`, or `remoteFile`'s path
+      resolved under `localDir`; a remote path that escapes `localDir`
+      (absolute, or climbing out with `..`) is an `ArgumentError` rather than a
+      write outside the directory.
+  - Added `listFiles`: the repository's `rfilename` entries, sorted, with the
+    same extension filtering `downloadSnapshot` applies. Lets a caller show what
+    a repository offers before choosing, and explain a failed download without
+    guessing at its contents.
+
 ## 1.0.3
 
 - Cache store:

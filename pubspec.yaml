@@ -1,6 +1,6 @@
 name: huggingface_downloader
-description: Download complete model snapshots directly from Hugging Face repositories with resume, overwrite, extension filters, and CLI support.
-version: 1.0.3
+description: Download model snapshots or single files directly from Hugging Face repositories with resume, overwrite, extension filters, and CLI support.
+version: 1.1.0
 repository: https://github.com/gmpassos/huggingface_downloader
 issue_tracker: https://github.com/gmpassos/huggingface_downloader/issues
 
